@@ -29,9 +29,7 @@ Copyright:
 License:
 {license}
 """
-#
 # vim:set et ts=8 sw=4:
-#
 
 __version__ = '0.1'
 __author__ = 'Hans-Peter Jansen <hpj@urpla.net>'
@@ -63,6 +61,7 @@ class gpar:
 stdout = lambda *msg: print(*msg, file = sys.stdout, flush = True)
 stderr = lambda *msg: print(*msg, file = sys.stderr, flush = True)
 
+
 class Log:
     """Minimal logging"""
     CRITICAL = 50
@@ -87,6 +86,9 @@ class Log:
         # internal
         self._datefmt = '%Y-%m-%d %H:%M:%S'
 
+    def getLevel(self):
+        return self._level
+
     def setLevel(self, level):
         oldlevel = 0
         if level and level in Log._levelToName:
@@ -94,13 +96,10 @@ class Log:
             self._level = level
         return oldlevel
 
-    def getLevel(self):
-        return self._level
-
     def log(self, level, msg):
         if level >= self._level:
-            ts = time.strftime(self._datefmt)
             lvl = self._levelToName[level]
+            ts = time.strftime(self._datefmt)
             stderr(f'{ts} {lvl}: [{self._name}] {msg}')
 
     def critical(self, msg):
@@ -118,7 +117,7 @@ class Log:
     def debug(self, msg):
         self.log(Log.DEBUG, msg)
 
-log = Log(gpar.appname, Log.WARNING)
+log = Log(gpar.appname, Log.ERROR)
 
 
 def exit(ret = 0, msg = None, usage = False):
@@ -135,7 +134,7 @@ def _access_check(fn, mode):
     return (os.path.exists(fn) and os.access(fn, mode))
 
 
-# simplified (unixoid) version of which
+# slightly adjusted and simplified (unixoid) version of shutil.which
 def which(cmd, mode=os.F_OK | os.X_OK, path=None):
     """Given a command, mode, and a PATH string, return the path which
     conforms to the given mode on the PATH, or None if there is no such
@@ -143,29 +142,26 @@ def which(cmd, mode=os.F_OK | os.X_OK, path=None):
     `mode` defaults to os.F_OK | os.X_OK. `path` defaults to the result
     of os.environ.get("PATH"), or can be overridden with a custom search
     path.
+    Provide an empty string to disable any auxiliary path processing, or
+    ':' to limit the search to the current directory.
     """
-    # If we're given a path with a directory part, look it up directly rather
-    # than referring to PATH directories. This includes checking relative to the
-    # current directory, e.g. ./script
+    # a path was provided, short circuit processing
     if os.path.dirname(cmd):
         if _access_check(cmd, mode):
-            return cmd
+            return os.path.abspath(cmd)
         return None
 
     use_bytes = isinstance(cmd, bytes)
 
     if path is None:
-        path = os.environ.get("PATH", None)
+        path = os.environ.get('PATH', None)
         if path is None:
             try:
-                path = os.confstr("CS_PATH")
+                path = os.confstr('CS_PATH')
             except (AttributeError, ValueError):
-                # os.confstr() or CS_PATH is not available
+                # neither os.confstr() nor CS_PATH is available
                 path = os.defpath
-        # bpo-35755: Don't use os.defpath if the PATH environment variable is
-        # set to an empty string
 
-    # PATH='' doesn't match, whereas PATH=':' looks in the current directory
     if not path:
         return None
 
@@ -188,40 +184,35 @@ def which(cmd, mode=os.F_OK | os.X_OK, path=None):
 
 
 def run(args):
-    """execute args via execv* replacing this process"""
-    ret = 127
+    """execute args via execv from alternative path, if available"""
     log.info(f'[{gpar.pid}]: started: {args}')
-
     march = gpar.march or gpar.kernel_march
-    prog = args[0]
-    if os.access(prog, os.X_OK):
-        prog = os.path.abspath(prog)
-    else:
-        prog = which(prog)
+    prog = which(args[0])
     if prog:
         if march:
+            # prog was found and march was provided
             pth, exe = os.path.split(prog)
             basepath, toppath = os.path.split(pth)
             marchpath = os.path.join(basepath, toppath + '-' + march)
             marchprog = os.path.join(marchpath, exe)
-            if os.path.exists(marchprog) and os.access(marchprog, os.X_OK):
+            if _access_check(marchprog, os.X_OK):
                 args[0] = marchprog
         else:
-            log.warning(f'neither --march nor march via /proc/cmdline provided: will exec {args} verbatim')
+            log.warning(f'neither --march nor march via /proc/cmdline provided: '
+                         'will exec {args} verbatim')
+        # replace this process with new new one
         try:
-            os.execv(args[0], args)
+            os.execvp(args[0], args)
         except Exception as e:
             log.error(e)
     else:
-        log.error(f'cannot determine path of prog: will try to exec {args} verbatim')
-        # try to execute verbatim
-        try:
-            os.execv(args[0], args)
-        except Exception as e:
-            log.error(e)
-
+        prog = args[0]
+        errmsg = f'executable "{prog}" not found'
+        if not os.path.dirname(prog):
+            errmsg += 'in $PATH'
+        log.error(errmsg)
     # error condition: executable not found
-    return ret
+    return 127
 
 
 def main(argv = None):
