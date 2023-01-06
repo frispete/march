@@ -1,0 +1,4 @@
+include *.md *.txt LICENSE CHANGES
+global-include *.py
+exclude .gitignore
+
