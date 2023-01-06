@@ -34,6 +34,7 @@ License:
 __version__ = '0.1'
 __author__ = 'Hans-Peter Jansen <hpj@urpla.net>'
 __license__ = 'GNU GPL v2 - see http://www.gnu.org/licenses/gpl2.txt for details'
+__homepage__ = 'https://github.com/frispete/march'
 
 
 import os
@@ -53,6 +54,7 @@ class gpar:
     version = __version__
     author = __author__
     license = __license__
+    homepage = __homepage__
     march = None
     # internal
     kernel_march = None
