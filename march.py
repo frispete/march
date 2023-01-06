@@ -1,4 +1,4 @@
-#! /usr/bin/env python3
+#!/usr/bin/python3
 """
 Usage: {appname} [-hVv][-m march] prog [args..]
        -h, --help           this message
@@ -192,7 +192,7 @@ def run(args):
     prog = which(args[0])
     if prog:
         if march:
-            # prog was found and march was provided
+            log.debug(f'try to locate an -{march} alternative for {prog}')
             pth, exe = os.path.split(prog)
             basepath, toppath = os.path.split(pth)
             marchpath = os.path.join(basepath, toppath + '-' + march)
@@ -239,6 +239,9 @@ def main(argv = None):
         elif opt in ('-m', '--march'):
             gpar.march = par
 
+    if not args:
+        exit(1, 'no prog provided', True)
+
     try:
         cmdline = open('/proc/cmdline').read().split()
     except Exception as e:
@@ -247,6 +250,7 @@ def main(argv = None):
     for arg in cmdline:
         if arg.startswith('march='):
             gpar.kernel_march = arg[6:]
+            log.info(f'march={gpar.kernel_march} detected from /proc/cmdline')
             break
 
     try:
