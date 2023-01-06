@@ -1,28 +1,33 @@
 #! /usr/bin/env python3
 """
-Synopsis:
-
-Usage: (appname) [-hVvs][-l logfile][-m march] prog [args..]
+Usage: {appname} [-hVv][-m march] prog [args..]
        -h, --help           this message
        -V, --version        print version and exit
        -v, --verbose        verbose mode (cumulative)
-       -s, --syslog         log errors to syslog
-       -l, --log=logfile    log to this file
        -m, --march=flavour  select a specific march
 
 Description:
 Utility program for the execution of machine-optimised alternatives.
-The general choice is done via kernel command line: march={v2,v3,v4}
-If the parent directory of prog exists with a march suffix, and contains
+The general system setting is done via kernel command line: march={{v2,v3,v4}}
+If the parent directory of prog exists with a -march suffix and contains
 an executable with the same name, run that instead of prog.
 
+Example:
+/usr/bin/prog       # standard program
+/usr/bin-v3/prog    # optimised version of program
+
+march -mv3 prog     # would execute /usr/bin-v3/prog
+
 Notes:
+The same holds true, if you insert /usr/bin-v3 before /usr/bin in $PATH,
+but {appname} does not require any $PATH modification and will work with
+executables in non-standard paths as well.
 
 Copyright:
-(c)2023 by (author)
+(c)2023 by {author}
 
 License:
-(license)
+{license}
 """
 #
 # vim:set et ts=8 sw=4:
@@ -35,11 +40,8 @@ __license__ = 'GNU GPL v2 - see http://www.gnu.org/licenses/gpl2.txt for details
 
 import os
 import sys
+import time
 import getopt
-import shutil
-import logging
-import logging.handlers
-import functools
 
 
 class gpar:
@@ -53,18 +55,70 @@ class gpar:
     version = __version__
     author = __author__
     license = __license__
-    loglevel = logging.WARNING
-    logfile = None
-    syslog = False
     march = None
     # internal
     kernel_march = None
 
 
-log = logging.getLogger(gpar.appname)
-
 stdout = lambda *msg: print(*msg, file = sys.stdout, flush = True)
 stderr = lambda *msg: print(*msg, file = sys.stderr, flush = True)
+
+class Log:
+    """Minimal logging"""
+    CRITICAL = 50
+    ERROR = 40
+    WARNING = 30
+    INFO = 20
+    DEBUG = 10
+    NOTSET = 0
+
+    _levelToName = {
+        CRITICAL: 'CRITICAL',
+        ERROR: 'ERROR',
+        WARNING: 'WARNING',
+        INFO: 'INFO',
+        DEBUG: 'DEBUG',
+        NOTSET: 'NOTSET',
+    }
+
+    def __init__(self, appname, level):
+        self._name = appname
+        self._level = level
+        # internal
+        self._datefmt = '%Y-%m-%d %H:%M:%S'
+
+    def setLevel(self, level):
+        oldlevel = 0
+        if level and level in Log._levelToName:
+            oldlevel = self._level
+            self._level = level
+        return oldlevel
+
+    def getLevel(self):
+        return self._level
+
+    def log(self, level, msg):
+        if level >= self._level:
+            ts = time.strftime(self._datefmt)
+            lvl = self._levelToName[level]
+            stderr(f'{ts} {lvl}: [{self._name}] {msg}')
+
+    def critical(self, msg):
+        self.log(Log.CRITICAL, msg)
+
+    def error(self, msg):
+        self.log(Log.ERROR, msg)
+
+    def warning(self, msg):
+        self.log(Log.WARNING, msg)
+
+    def info(self, msg):
+        self.log(Log.INFO, msg)
+
+    def debug(self, msg):
+        self.log(Log.DEBUG, msg)
+
+log = Log(gpar.appname, Log.WARNING)
 
 
 def exit(ret = 0, msg = None, usage = False):
@@ -76,22 +130,61 @@ def exit(ret = 0, msg = None, usage = False):
     sys.exit(ret)
 
 
-def setup_logging(loglevel, logfile, syslog_errors):
-    """Setup various aspects of logging facility"""
-    logconfig = dict(
-        level = loglevel,
-        format = '%(asctime)s %(levelname)5s: [%(name)s] %(message)s',
-        datefmt = '%Y-%m-%d %H:%M:%S',
-    )
-    if logfile not in (None, '-'):
-        logconfig['filename'] = logfile
-    logging.basicConfig(**logconfig)
-    if syslog_errors:
-        syslog = logging.handlers.SysLogHandler(address = '/dev/log')
-        syslog.setLevel(logging.ERROR)
-        formatter = logging.Formatter('%(name)s[%(process)d]: %(levelname)s: %(message)s')
-        syslog.setFormatter(formatter)
-        logging.getLogger().addHandler(syslog)
+# Check that a given file can be accessed with the correct mode.
+def _access_check(fn, mode):
+    return (os.path.exists(fn) and os.access(fn, mode))
+
+
+# simplified (unixoid) version of which
+def which(cmd, mode=os.F_OK | os.X_OK, path=None):
+    """Given a command, mode, and a PATH string, return the path which
+    conforms to the given mode on the PATH, or None if there is no such
+    file.
+    `mode` defaults to os.F_OK | os.X_OK. `path` defaults to the result
+    of os.environ.get("PATH"), or can be overridden with a custom search
+    path.
+    """
+    # If we're given a path with a directory part, look it up directly rather
+    # than referring to PATH directories. This includes checking relative to the
+    # current directory, e.g. ./script
+    if os.path.dirname(cmd):
+        if _access_check(cmd, mode):
+            return cmd
+        return None
+
+    use_bytes = isinstance(cmd, bytes)
+
+    if path is None:
+        path = os.environ.get("PATH", None)
+        if path is None:
+            try:
+                path = os.confstr("CS_PATH")
+            except (AttributeError, ValueError):
+                # os.confstr() or CS_PATH is not available
+                path = os.defpath
+        # bpo-35755: Don't use os.defpath if the PATH environment variable is
+        # set to an empty string
+
+    # PATH='' doesn't match, whereas PATH=':' looks in the current directory
+    if not path:
+        return None
+
+    if use_bytes:
+        path = os.fsencode(path)
+        path = path.split(os.fsencode(os.pathsep))
+    else:
+        path = os.fsdecode(path)
+        path = path.split(os.pathsep)
+
+    seen = set()
+    for dir in path:
+        normdir = os.path.normcase(dir)
+        if not normdir in seen:
+            seen.add(normdir)
+            name = os.path.join(dir, cmd)
+            if _access_check(name, mode):
+                return name
+    return None
 
 
 def run(args):
@@ -104,7 +197,7 @@ def run(args):
     if os.access(prog, os.X_OK):
         prog = os.path.abspath(prog)
     else:
-        prog = shutil.which(prog)
+        prog = which(prog)
     if prog:
         if march:
             pth, exe = os.path.split(prog)
@@ -137,8 +230,8 @@ def main(argv = None):
         argv = sys.argv[1:]
 
     try:
-        optlist, args = getopt.getopt(argv, 'hVvl:sm:',
-            ('help', 'version', 'verbose', 'logfile=', 'syslog', 'march=')
+        optlist, args = getopt.getopt(argv, 'hVvm:',
+            ('help', 'version', 'verbose', 'march=')
         )
     except getopt.error as msg:
         exit(1, msg, True)
@@ -149,16 +242,9 @@ def main(argv = None):
         elif opt in ('-V', '--version'):
             exit(msg = 'version %s' % gpar.version)
         elif opt in ('-v', '--verbose'):
-            if gpar.loglevel > logging.DEBUG:
-                gpar.loglevel -= 10
-        elif opt in ('-l', '--logfile'):
-            gpar.logfile = par
-        elif opt in ('-s', '--syslog'):
-            gpar.syslog = True
+            log.setLevel(log.getLevel() - 10)
         elif opt in ('-m', '--march'):
             gpar.march = par
-
-    setup_logging(gpar.loglevel, gpar.logfile, gpar.syslog)
 
     try:
         cmdline = open('/proc/cmdline').read().split()
