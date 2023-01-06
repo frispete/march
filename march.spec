@@ -17,7 +17,7 @@
 
 
 Name:           march
-Version:        0.0.1
+Version:        0.1
 Release:        0
 Summary:        Multi Arch Wrapper Script
 License:        GPL-2.0-only
