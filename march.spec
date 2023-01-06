@@ -36,6 +36,8 @@ an executable with the same name, run that instead of program.
 
 %prep
 %setup -q
+# shebang not needed at this point
+sed -i '1!b;/^#!\/usr\/bin\/python/d' %{name}.py
 
 %build
 python3 setup.py build
